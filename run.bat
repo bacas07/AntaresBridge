@@ -7,42 +7,54 @@ echo   Antares Bridge
 echo ========================================
 echo.
 
-REM ── Detectar Python ────────────────────────────────────────────
-set PYTHON=
-python --version >nul 2>nul
-if %errorlevel% equ 0 (
-    python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>nul
-    if %errorlevel% equ 0 set PYTHON=python
-)
-
-if "%PYTHON%"=="" (
-    echo.
-    echo  ********************************************
-    echo  *  ERROR: Python 3.8+ no esta instalado.  *
-    echo  ********************************************
-    echo.
-    echo  Esta maquina tiene Windows Server 2012.
-    echo  Necesitas instalar Python 3.9 (ultima
-    echo  version compatible con WS2012).
-    echo.
-    echo  PASOS:
-    echo  1. Descarga Python 3.9.13 para Windows:
-    echo     https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe
-    echo.
-    echo  2. Ejecuta el instalador.
-    echo     - MARCA "Add Python 3.9 to PATH"
-    echo     - Haz clic en "Install Now"
-    echo.
-    echo  3. Abre una NUEVA terminal cmd y ejecuta:
-    echo     python run.py
-    echo.
+REM 1. Verificar que .env existe
+if not exist ".env" (
+    echo ERROR: Archivo .env no encontrado.
+    echo   Copialo: copy .env.example .env
+    echo   Luego editalo con notepad .env
     pause
     exit /b 1
 )
 
-echo [OK] Python encontrado.
+REM 2. Crear venv si no existe
+if not exist "venv\" (
+    echo Creando entorno virtual...
+    python -m venv venv
+    if errorlevel 1 (
+        echo ERROR: No se pudo crear el venv.
+        pause
+        exit /b 1
+    )
+)
+
+REM 3. Activar venv
+call venv\Scripts\activate.bat
+if errorlevel 1 (
+    echo ERROR: No se pudo activar el venv.
+    pause
+    exit /b 1
+)
+
+REM 4. Instalar dependencias
+echo Instalando dependencias...
+pip install -r requirements.txt
+if errorlevel 1 (
+    echo Probando instalacion offline...
+    pip install --no-index --find-links wheels\ -r requirements.txt
+    if errorlevel 1 (
+        echo ERROR: No se pudieron instalar las dependencias.
+        pause
+        exit /b 1
+    )
+)
+
+REM 5. Arrancar
+echo.
+echo Iniciando Antares Bridge...
+echo Dashboard: http://localhost:8001
+echo Ctrl+C para detener
 echo.
 
-REM ── Dejar que run.py haga el resto ────────────────────────────
-%PYTHON% run.py
+python -m src.main
+
 pause
