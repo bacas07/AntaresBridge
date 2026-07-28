@@ -8,7 +8,7 @@ import pymysql
 import time
 from datetime import datetime, date, timedelta
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 
 from src.config import get_settings
 from src.logger import logger
@@ -17,7 +17,7 @@ from src.db.status import sync_status
 
 # ── helpers de conversión ──────────────────────────────────────────────
 
-def _parse_fechacita(fechacita_str: str) -> str | None:
+def _parse_fechacita(fechacita_str: str) -> Optional[str]:
     """Convierte YYYYMMDDHHMM → ISO datetime string."""
     if not fechacita_str or len(str(fechacita_str)) < 12:
         return None
@@ -307,7 +307,7 @@ class AntaresDB:
 
     # ── CITAS ───────────────────────────────────────────────────────────
 
-    def fetch_new_appointments(self, last_sync: datetime | None = None) -> list[dict]:
+    def fetch_new_appointments(self, last_sync: Optional[datetime] = None) -> list[dict]:
         """Lee citas desde MySQL (citas JOIN pxcita).
 
         Convierte fechacita YYYYMMDDHHMM → ISO datetime.
@@ -407,7 +407,7 @@ class AntaresDB:
 
     # ── PACIENTES ───────────────────────────────────────────────────────
 
-    def fetch_patients(self, updated_since: datetime | None = None) -> list[dict]:
+    def fetch_patients(self, updated_since: Optional[datetime] = None) -> list[dict]:
         import time
         start = time.monotonic()
         try:
@@ -604,7 +604,7 @@ class AntaresDB:
 
     # ── CREAR AFILIADO ─────────────────────────────────────────────────
 
-    def create_afiliado(self, data: dict) -> str | None:
+    def create_afiliado(self, data: dict) -> Optional[str]:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             paciente_id = _str_val(data.get("patient_id", data.get("document_number", "")))
@@ -670,7 +670,7 @@ antares_db = AntaresDB()
 
 # ── helper interno ──────────────────────────────────────────────────────
 
-def _extract_time(raw) -> str | None:
+def _extract_time(raw) -> Optional[str]:
     """Extrae solo la HORA de un datetime dummy de citas_conf.
 
     Las columnas hiniciomX/hfinalmX tienen valores como:

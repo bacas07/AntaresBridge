@@ -2,6 +2,7 @@ import asyncio
 import httpx
 import time
 from datetime import datetime, date, timezone
+from typing import Optional
 
 from src.config import get_settings
 from src.logger import logger
@@ -93,13 +94,13 @@ async def wait_for_mysql_with_backoff() -> bool:
 class SyncEngine:
     def __init__(self):
         self.settings = get_settings()
-        self.last_sync_dt: datetime | None = None
-        self._http_client: httpx.AsyncClient | None = None
-        self._ping_task: asyncio.Task | None = None
+        self.last_sync_dt: Optional[datetime] = None
+        self._http_client: Optional[httpx.AsyncClient] = None
+        self._ping_task: Optional[asyncio.Task] = None
         self._running = False
 
     @property
-    def last_sync(self) -> str | None:
+    def last_sync(self) -> Optional[str]:
         return self.last_sync_dt.isoformat() if self.last_sync_dt else None
 
     async def _get_client(self) -> httpx.AsyncClient:
