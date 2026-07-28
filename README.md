@@ -22,12 +22,12 @@ cp .env.example .env
 ## Ejecución (sin Docker)
 
 ```bash
-./run.sh
+# Editar .env con las credenciales reales, luego:
+python3 run.py
 ```
 
-El script crea automáticamente el entorno virtual, instala las dependencias e inicia el bridge.
-
-El dashboard de monitoreo estará disponible en `http://localhost:8001`.
+`run.py` crea automáticamente el venv, instala dependencias y arranca el bridge.
+El dashboard estará en `http://localhost:8001`.
 
 ## Ejecución (con Docker)
 
