@@ -7,7 +7,7 @@ echo   Antares Bridge
 echo ========================================
 echo.
 
-REM 1. Verificar que .env existe
+REM 1. Verificar .env
 if not exist ".env" (
     echo ERROR: Archivo .env no encontrado.
     echo   Copialo: copy .env.example .env
@@ -16,7 +16,35 @@ if not exist ".env" (
     exit /b 1
 )
 
-REM 2. Crear venv si no existe
+REM 2. Verificar Python
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Python no encontrado.
+    echo   Instala Python 3.9.13 para Windows:
+    echo   https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe
+    echo   Marca "Add Python to PATH" al instalar.
+    pause
+    exit /b 1
+)
+
+REM 3. Borrar venv si viene de otra maquina (macOS/Linux)
+if exist "venv\pyvenv.cfg" (
+    findstr /C:"Library" venv\pyvenv.cfg >nul 2>&1
+    if not errorlevel 1 (
+        echo Venv de macOS detectado, eliminando...
+        rmdir /s /q venv
+    )
+)
+REM Tambien verificar que python.exe del venv funcione
+if exist "venv\Scripts\python.exe" (
+    venv\Scripts\python.exe -c "" >nul 2>&1
+    if errorlevel 1 (
+        echo Venv corrupto, eliminando...
+        rmdir /s /q venv
+    )
+)
+
+REM 4. Crear venv
 if not exist "venv\" (
     echo Creando entorno virtual...
     python -m venv venv
@@ -27,15 +55,10 @@ if not exist "venv\" (
     )
 )
 
-REM 3. Activar venv
+REM 5. Activar venv
 call venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo ERROR: No se pudo activar el venv.
-    pause
-    exit /b 1
-)
 
-REM 4. Instalar dependencias
+REM 6. Instalar dependencias
 echo Instalando dependencias...
 pip install -r requirements.txt
 if errorlevel 1 (
@@ -48,11 +71,11 @@ if errorlevel 1 (
     )
 )
 
-REM 5. Arrancar
+REM 7. Arrancar
 echo.
 echo Iniciando Antares Bridge...
-echo Dashboard: http://localhost:8001
-echo Ctrl+C para detener
+echo   Dashboard: http://localhost:8001
+echo   Ctrl+C para detener
 echo.
 
 python -m src.main
