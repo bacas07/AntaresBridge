@@ -1,36 +1,35 @@
 # Antares Bridge
 
-Puente de sincronización entre Antares (SQL Server legacy) y Agenda System.
+Puente de sincronización entre Antares (MySQL) y Agenda System.
 
-- Corre en red privada (sin puertos expuestos)
-- Consulta CIT, AFI, MED, SER en Antares cada N minutos
+- Consulta servicios, doctores, horarios, citas, pacientes, etc. en Antares cada N minutos
 - Envía datos nuevos/actualizados a Agenda System
 - Recibe cambios locales de Agenda System y los escribe en Antares
 
-## Arquitectura
-
-```
-Antares SQL Server (1433)
-        ↕
-  antares-bridge (sync engine)
-        ↕  HTTP outbound
-Agenda System (8000)
-```
-
 ## Requisitos
 
-- Docker & Docker Compose
-- Acceso a SQL Server Antares (host.docker.internal:1433)
+- Python 3.8+
+- Acceso a la base de datos MySQL de Antares
 - Agenda System corriendo y accesible
 
 ## Configuración
 
 ```bash
 cp .env.example .env
-# Editar .env con credenciales de Antares
+# Editar .env con las credenciales y URLs correctas
 ```
 
-## Ejecución
+## Ejecución (sin Docker)
+
+```bash
+./run.sh
+```
+
+El script crea automáticamente el entorno virtual, instala las dependencias e inicia el bridge.
+
+El dashboard de monitoreo estará disponible en `http://localhost:8001`.
+
+## Ejecución (con Docker)
 
 ```bash
 docker compose up --build -d
@@ -39,5 +38,7 @@ docker compose up --build -d
 ## Logs
 
 ```bash
+# Sin Docker: los logs se imprimen en stdout
+# Con Docker:
 docker compose logs -f
 ```
