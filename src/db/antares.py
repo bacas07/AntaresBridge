@@ -87,7 +87,12 @@ class AntaresDB:
             )
             yield conn
         except pymysql.MySQLError as e:
-            logger.error("mysql_connection_error", error=str(e))
+            logger.error("error_conexion_mysql",
+                         mensaje=f"Error al conectar a MySQL en {self.host}:{self.port}/{self.database}",
+                         error=str(e),
+                         sugerencia="Verifica que el servidor MySQL esté activo, "
+                                    "que ANTARES_SERVER y ANTARES_PORT en .env sean correctos, "
+                                    "y que el firewall permita la conexión")
             sync_status.record_mysql_ping(success=False, error=str(e))
             raise
         finally:
@@ -144,12 +149,16 @@ class AntaresDB:
                 rows = cursor.fetchall()
                 duration_ms = int((time.monotonic() - start) * 1000)
                 sync_status.record_operation("fetch_services", success=True, records_processed=len(rows), duration_ms=duration_ms)
-                logger.info("fetch_services", count=len(rows))
+                logger.info("fetch_servicios_ok",
+                            mensaje=f"Obtenidos {len(rows)} servicios CUPS desde MySQL",
+                            total=len(rows))
                 return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_services", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_services_error", error=str(e))
+            logger.error("fetch_servicios_error",
+                         mensaje="Error al obtener servicios CUPS desde MySQL",
+                         error=str(e))
             return []
 
     # ── DOCTORES (virtuales, no hay tabla médicos) ─────────────────────
@@ -216,12 +225,16 @@ class AntaresDB:
 
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_doctors", success=True, records_processed=len(doctors), duration_ms=duration_ms)
-            logger.info("fetch_doctors", count=len(doctors))
+            logger.info("fetch_doctores_ok",
+                        mensaje=f"Obtenidos {len(doctors)} doctores desde citas_conf",
+                        total=len(doctors))
             return doctors
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_doctors", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_doctors_error", error=str(e))
+            logger.error("fetch_doctores_error",
+                         mensaje="Error al obtener doctores",
+                         error=str(e))
             return []
 
     # ── HORARIOS (schedules desde citas_conf) ──────────────────────────
@@ -297,12 +310,17 @@ class AntaresDB:
 
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_schedules", success=True, records_processed=len(schedules), duration_ms=duration_ms)
-            logger.info("fetch_schedules", configs=len(rows), schedules=len(schedules))
+            logger.info("fetch_horarios_ok",
+                        mensaje=f"Obtenidos {len(schedules)} horarios desde {len(rows)} configs",
+                        total_horarios=len(schedules),
+                        total_configs=len(rows))
             return schedules
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_schedules", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_schedules_error", error=str(e))
+            logger.error("fetch_horarios_error",
+                         mensaje="Error al obtener horarios",
+                         error=str(e))
             return []
 
     # ── CITAS ───────────────────────────────────────────────────────────
@@ -397,12 +415,16 @@ class AntaresDB:
 
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_appointments", success=True, records_processed=len(appointments), duration_ms=duration_ms)
-            logger.info("fetch_appointments", count=len(appointments))
+            logger.info("fetch_citas_ok",
+                        mensaje=f"Obtenidas {len(appointments)} citas desde MySQL",
+                        total=len(appointments))
             return appointments
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_appointments", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_appointments_error", error=str(e))
+            logger.error("fetch_citas_error",
+                         mensaje="Error al obtener citas",
+                         error=str(e))
             return []
 
     # ── PACIENTES ───────────────────────────────────────────────────────
@@ -443,12 +465,16 @@ class AntaresDB:
                 rows = cursor.fetchall()
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_patients", success=True, records_processed=len(rows), duration_ms=duration_ms)
-            logger.info("fetch_patients", count=len(rows))
+            logger.info("fetch_pacientes_ok",
+                        mensaje=f"Obtenidos {len(rows)} pacientes desde MySQL",
+                        total=len(rows))
             return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_patients", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_patients_error", error=str(e))
+            logger.error("fetch_pacientes_error",
+                         mensaje="Error al obtener pacientes",
+                         error=str(e))
             return []
 
     # ── NO DISPONIBILIDAD ──────────────────────────────────────────────
@@ -476,12 +502,16 @@ class AntaresDB:
                 rows = cursor.fetchall()
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_unavailability", success=True, records_processed=len(rows), duration_ms=duration_ms)
-            logger.info("fetch_unavailability", count=len(rows))
+            logger.info("fetch_no_disponibilidad_ok",
+                        mensaje=f"Obtenidos {len(rows)} días no disponibles",
+                        total=len(rows))
             return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_unavailability", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_unavailability_error", error=str(e))
+            logger.error("fetch_no_disponibilidad_error",
+                         mensaje="Error al obtener días no disponibles",
+                         error=str(e))
             return []
 
     # ── LÍMITES DE PLAN ────────────────────────────────────────────────
@@ -507,12 +537,16 @@ class AntaresDB:
                 rows = cursor.fetchall()
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_plan_limits", success=True, records_processed=len(rows), duration_ms=duration_ms)
-            logger.info("fetch_plan_limits", count=len(rows))
+            logger.info("fetch_limites_plan_ok",
+                        mensaje=f"Obtenidos {len(rows)} límites de plan",
+                        total=len(rows))
             return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_plan_limits", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
-            logger.error("fetch_plan_limits_error", error=str(e))
+            logger.error("fetch_limites_plan_error",
+                         mensaje="Error al obtener límites de plan",
+                         error=str(e))
             return []
 
     # ── PUSH: INSERTAR CITA DESDE AGENDA → MYSQL ──────────────────────
@@ -571,7 +605,10 @@ class AntaresDB:
                 """, (new_id, cups_code, cups_code))
 
             conn.commit()
-            logger.info("insert_cit", id=new_id, fechacita=fechacita)
+            logger.info("insertar_cita_ok",
+                        mensaje="Cita insertada en MySQL",
+                        id_cita=new_id,
+                        fecha=fechacita)
             return True
 
     # ── CANCELAR ───────────────────────────────────────────────────────
@@ -587,7 +624,9 @@ class AntaresDB:
                 (reason, appointment_id),
             )
             conn.commit()
-            logger.info("cancel_appointment", id=appointment_id)
+            logger.info("cancelar_cita_ok",
+                        mensaje="Cita cancelada en MySQL",
+                        id_cita=appointment_id)
             return cursor.rowcount > 0
 
     def update_appointment_status(self, appointment_id: str, status: str) -> bool:
@@ -613,7 +652,9 @@ class AntaresDB:
             cursor.execute("SELECT COUNT(*) AS cnt FROM pacientes WHERE numeropaciente = %s", (paciente_id,))
             row = cursor.fetchone()
             if row and list(row.values())[0] > 0:
-                logger.info("create_afiliado_skip", id=paciente_id, reason="ya_existe")
+                logger.info("crear_afiliado_omitir",
+                            mensaje="Afiliado ya existe en MySQL, omitiendo",
+                            id_paciente=paciente_id)
                 return paciente_id
 
             # Construir texto de observaciones para datos que no tienen columna en MySQL
@@ -659,7 +700,10 @@ class AntaresDB:
                 "WHATSAPP",
             ))
             conn.commit()
-            logger.info("create_afiliado", id=paciente_id, extra=extra_notes)
+            logger.info("crear_afiliado_ok",
+                        mensaje="Afiliado creado en MySQL",
+                        id_paciente=paciente_id,
+                        datos_extra=str(extra_notes))
             return paciente_id
 
 

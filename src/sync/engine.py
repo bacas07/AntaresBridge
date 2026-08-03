@@ -57,12 +57,17 @@ def validate_environment() -> bool:
 
     if missing:
         for var in missing:
-            logger.error("env_missing_critical", variable=var)
+            logger.error("falta_variable_entorno",
+                         mensaje=f"Falta la variable de entorno: {var}",
+                         variable=var,
+                         sugerencia="Revisa el archivo .env y asegúrate de que todas las variables tengan valor")
         raise RuntimeError(
             f"Faltan variables de entorno críticas: {', '.join(missing)}"
         )
 
-    logger.info("env_all_critical_vars_present", count=len(REQUIRED_ENV_VARS))
+    logger.info("variables_entorno_ok",
+                mensaje="Todas las variables de entorno requeridas están presentes",
+                total=len(REQUIRED_ENV_VARS))
     return True
 
 
@@ -73,20 +78,30 @@ async def wait_for_mysql_with_backoff() -> bool:
     Retorna True cuando la conexión es exitosa.
     """
     attempt = 0
+    settings = get_settings()
     while True:
         attempt += 1
-        logger.info("mysql_health_check_attempt", attempt=attempt)
+        logger.info("intento_conexion_mysql",
+                    mensaje=f"Intentando conectar a MySQL ({settings.antares_server}:{settings.antares_port})",
+                    intento=attempt)
         ok, latency, err = antares_db.ping()
         if ok:
-            logger.info("mysql_health_check_ok", latency_ms=latency)
+            logger.info("conexion_mysql_exitosa",
+                        mensaje="Conexión a MySQL establecida correctamente",
+                        latencia_ms=latency,
+                        intento=attempt)
             return True
 
         wait_s = min(5 * (2 ** (attempt - 1)), 60)
         logger.warning(
-            "mysql_health_check_failed",
-            attempt=attempt,
+            "fallo_conexion_mysql",
+            mensaje=f"No se pudo conectar a MySQL en {settings.antares_server}:{settings.antares_port}",
             error=err,
-            retry_in_s=wait_s,
+            intento=attempt,
+            reintento_en_s=wait_s,
+            sugerencia="Verifica que el servidor MySQL esté encendido, "
+                       "que ANTARES_SERVER y ANTARES_PORT en .env sean correctos, "
+                       "y que el firewall permita la conexión",
         )
         await asyncio.sleep(wait_s)
 
@@ -123,18 +138,27 @@ class SyncEngine:
                 break
             ok, latency, err = antares_db.ping()
             if ok:
-                logger.debug("mysql_ping_ok", latency_ms=latency)
+                logger.debug("ping_mysql_ok",
+                             mensaje="Ping a MySQL exitoso",
+                             latencia_ms=latency)
             else:
-                logger.warning("mysql_ping_failed", error=err)
-                # Intentar reconectar antes del siguiente ciclo
+                logger.warning("ping_mysql_fallo",
+                               mensaje="Ping a MySQL falló, reintentando...",
+                               error=err)
                 ok2, latency2, err2 = antares_db.ping()
                 if ok2:
-                    logger.info("mysql_reconnected", latency_ms=latency2)
+                    logger.info("mysql_reconectado",
+                                mensaje="MySQL reconectado exitosamente",
+                                latencia_ms=latency2)
                 else:
-                    logger.error("mysql_reconnect_failed", error=err2)
+                    logger.error("mysql_reconexion_fallo",
+                                 mensaje="No se pudo reconectar a MySQL",
+                                 error=err2,
+                                 sugerencia="Verifica que el servidor MySQL siga encendido")
 
     async def run(self):
-        logger.info("sync_engine_starting")
+        logger.info("motor_sync_iniciando",
+                    mensaje="Motor de sincronización iniciando")
 
         # 1. Validar variables de entorno
         validate_environment()
@@ -147,22 +171,27 @@ class SyncEngine:
         self._ping_task = asyncio.create_task(self._ping_loop())
 
         logger.info(
-            "sync_engine_running",
-            interval=self.settings.sync_interval_seconds,
-            antares_server=self.settings.antares_server,
-            agenda_url=self.settings.agenda_system_url,
+            "motor_sync_activo",
+            mensaje="Motor de sincronización activo — conectado a MySQL y listo",
+            intervalo_sync=f"{self.settings.sync_interval_seconds}s",
+            mysql=f"{self.settings.antares_server}:{self.settings.antares_port}",
+            agenda=self.settings.agenda_system_url,
         )
 
         while True:
             try:
                 await self.sync_cycle()
             except Exception as e:
-                logger.error("sync_cycle_error", error=str(e))
+                logger.error("error_ciclo_sync",
+                             mensaje="Error inesperado en el ciclo de sincronización",
+                             error=str(e))
             await asyncio.sleep(self.settings.sync_interval_seconds)
 
     async def sync_cycle(self):
         cycle_start = time.monotonic()
-        logger.info("sync_cycle_start", last_sync=self.last_sync)
+        logger.info("inicio_ciclo_sync",
+                    mensaje="Iniciando ciclo de sincronización",
+                    ultima_sync=self.last_sync)
         client = await self._get_client()
 
         ops_success = 0
@@ -172,7 +201,8 @@ class SyncEngine:
         try:
             services = antares_db.fetch_services()
             if services:
-                logger.info("sync_services_count", count=len(services))
+                logger.info("sync_servicios_enviados",
+                            mensaje=f"Enviando {len(services)} servicios al sistema de agenda")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/services",
@@ -183,17 +213,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_services_failed", error=str(e))
+                    logger.error("sync_servicios_fallo",
+                                 mensaje="Fallo al enviar servicios al sistema de agenda",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_services_unexpected_error", error=str(e))
+            logger.error("sync_servicios_error",
+                         mensaje="Error inesperado al sincronizar servicios",
+                         error=str(e))
 
         # ── fetch_doctors ────────────────────────────────────────────
         try:
             doctors = antares_db.fetch_doctors()
             if doctors:
-                logger.info("sync_doctors_count", count=len(doctors))
+                logger.info("sync_doctores_enviados",
+                            mensaje=f"Enviando {len(doctors)} doctores al sistema de agenda")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/doctors",
@@ -204,17 +239,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_doctors_failed", error=str(e))
+                    logger.error("sync_doctores_fallo",
+                                 mensaje="Fallo al enviar doctores",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_doctors_unexpected_error", error=str(e))
+            logger.error("sync_doctores_error",
+                         mensaje="Error inesperado al sincronizar doctores",
+                         error=str(e))
 
         # ── fetch_schedules ──────────────────────────────────────────
         try:
             schedules = antares_db.fetch_schedules()
             if schedules:
-                logger.info("sync_schedules_count", count=len(schedules))
+                logger.info("sync_horarios_enviados",
+                            mensaje=f"Enviando {len(schedules)} horarios al sistema de agenda")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/schedules",
@@ -225,17 +265,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_schedules_failed", error=str(e))
+                    logger.error("sync_horarios_fallo",
+                                 mensaje="Fallo al enviar horarios",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_schedules_unexpected_error", error=str(e))
+            logger.error("sync_horarios_error",
+                         mensaje="Error inesperado al sincronizar horarios",
+                         error=str(e))
 
         # ── fetch_unavailability ──────────────────────────────────────
         try:
             unavailability = antares_db.fetch_unavailability()
             if unavailability:
-                logger.info("sync_unavailability_count", count=len(unavailability))
+                logger.info("sync_no_disponibilidad_enviados",
+                            mensaje=f"Enviando {len(unavailability)} días no disponibles")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/unavailability",
@@ -246,17 +291,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_unavailability_failed", error=str(e))
+                    logger.error("sync_no_disponibilidad_fallo",
+                                 mensaje="Fallo al enviar días no disponibles",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_unavailability_unexpected_error", error=str(e))
+            logger.error("sync_no_disponibilidad_error",
+                         mensaje="Error inesperado al sincronizar no disponibilidad",
+                         error=str(e))
 
         # ── fetch_plan_limits ────────────────────────────────────────
         try:
             plan_limits = antares_db.fetch_plan_limits()
             if plan_limits:
-                logger.info("sync_plan_limits_count", count=len(plan_limits))
+                logger.info("sync_limites_plan_enviados",
+                            mensaje=f"Enviando {len(plan_limits)} límites de plan")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/plan-limits",
@@ -267,17 +317,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_plan_limits_failed", error=str(e))
+                    logger.error("sync_limites_plan_fallo",
+                                 mensaje="Fallo al enviar límites de plan",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_plan_limits_unexpected_error", error=str(e))
+            logger.error("sync_limites_plan_error",
+                         mensaje="Error inesperado al sincronizar límites de plan",
+                         error=str(e))
 
         # ── fetch_patients (antes de citas por FK) ───────────────────
         try:
             patients = antares_db.fetch_patients(self.last_sync_dt)
             if patients:
-                logger.info("sync_patients_count", count=len(patients))
+                logger.info("sync_pacientes_enviados",
+                            mensaje=f"Enviando {len(patients)} pacientes al sistema de agenda")
                 try:
                     resp = await client.post(
                         "/api/v1/sync/patients",
@@ -288,17 +343,22 @@ class SyncEngine:
                 except httpx.HTTPError as e:
                     ops_failed += 1
                     sync_status.record_agenda_sync(status_code=0, error=str(e))
-                    logger.error("sync_patients_failed", error=str(e))
+                    logger.error("sync_pacientes_fallo",
+                                 mensaje="Fallo al enviar pacientes",
+                                 error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_patients_unexpected_error", error=str(e))
+            logger.error("sync_pacientes_error",
+                         mensaje="Error inesperado al sincronizar pacientes",
+                         error=str(e))
 
         # ── fetch_appointments ───────────────────────────────────────
         try:
             appointments = antares_db.fetch_new_appointments(self.last_sync_dt)
             if appointments:
-                logger.info("sync_appointments_new", count=len(appointments))
+                logger.info("sync_citas_enviando",
+                            mensaje=f"Enviando {len(appointments)} citas al sistema de agenda")
                 for appt in appointments:
                     try:
                         resp = await client.post(
@@ -310,11 +370,16 @@ class SyncEngine:
                     except httpx.HTTPError as e:
                         ops_failed += 1
                         sync_status.record_agenda_sync(status_code=0, error=str(e))
-                        logger.error("sync_appointment_failed", id=appt.get("id"), error=str(e))
+                        logger.error("sync_cita_fallo",
+                                     mensaje="Fallo al enviar cita",
+                                     id_cita=appt.get("id"),
+                                     error=str(e))
             ops_success += 1
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_appointments_unexpected_error", error=str(e))
+            logger.error("sync_citas_error",
+                         mensaje="Error inesperado al sincronizar citas",
+                         error=str(e))
 
         # ── PUSH INVERSO: citas desde agenda → MySQL ────────────────
         push_success = 0
@@ -326,7 +391,8 @@ class SyncEngine:
                 updates = resp.json()
                 appointments_to_push = updates.get("appointments", [])
                 if appointments_to_push:
-                    logger.info("sync_pending_updates", count=len(appointments_to_push))
+                    logger.info("sync_push_inverso_pendientes",
+                                mensaje=f"Recibidas {len(appointments_to_push)} citas para insertar en MySQL")
                     pushed_ids = []
                     for appt in appointments_to_push:
                         if appt.get("source") in ("whatsapp", "system"):
@@ -336,7 +402,10 @@ class SyncEngine:
                                 push_success += 1
                             except Exception as e:
                                 push_failed += 1
-                                logger.error("sync_push_to_antares_failed", id=appt.get("id"), error=str(e))
+                                logger.error("sync_push_inverso_fallo",
+                                             mensaje="Fallo al insertar cita en MySQL",
+                                             id_cita=appt.get("id"),
+                                             error=str(e))
                     if pushed_ids:
                         try:
                             resp2 = await client.post(
@@ -345,16 +414,22 @@ class SyncEngine:
                             )
                             sync_status.record_agenda_sync(status_code=resp2.status_code)
                         except httpx.HTTPError as e:
-                            logger.error("sync_push_result_failed", error=str(e))
+                            logger.error("sync_push_resultado_fallo",
+                                         mensaje="Fallo al notificar resultado del push inverso",
+                                         error=str(e))
             else:
                 ops_failed += 1
         except httpx.HTTPError as e:
             ops_failed += 1
             sync_status.record_agenda_sync(status_code=0, error=str(e))
-            logger.error("sync_pending_updates_failed", error=str(e))
+            logger.error("sync_push_inverso_error_http",
+                         mensaje="Error HTTP al obtener citas pendientes",
+                         error=str(e))
         except Exception as e:
             ops_failed += 1
-            logger.error("sync_push_inverse_unexpected_error", error=str(e))
+            logger.error("sync_push_inverso_error",
+                         mensaje="Error inesperado en push inverso",
+                         error=str(e))
 
         sync_status.record_operation(
             "push_to_antares",
@@ -373,12 +448,13 @@ class SyncEngine:
         )
 
         logger.info(
-            "sync_cycle_complete",
-            duration_s=round(duration_s, 2),
-            ops_success=ops_success,
-            ops_failed=ops_failed,
-            push_success=push_success,
-            push_failed=push_failed,
+            "ciclo_sync_completado",
+            mensaje="Ciclo de sincronización completado",
+            duracion_s=round(duration_s, 2),
+            operaciones_exitosas=ops_success,
+            operaciones_fallidas=ops_failed,
+            push_exitosos=push_success,
+            push_fallidos=push_failed,
         )
 
     async def close(self):
