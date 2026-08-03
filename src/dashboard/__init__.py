@@ -1,7 +1,7 @@
 """Dashboard HTTP para antares-bridge — puerto 8001."""
 
 import asyncio
-import pymysql
+import pyodbc
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from fastapi import FastAPI, Query
@@ -499,52 +499,44 @@ def create_dashboard_app() -> FastAPI:
         date_from: str = Query(..., description="Fecha inicio YYYY-MM-DD"),
         date_to: str = Query(..., description="Fecha fin YYYY-MM-DD"),
     ):
-        """Consulta disponibilidad real desde MySQL (citas estado='-1').
-
-        Lee directo de la tabla citas en datosipspymr para garantizar
-        datos actualizados de slots disponibles, sin depender del sync
-        a PostgreSQL que solo transfiere citas ocupadas.
-        """
+        """Consulta disponibilidad real desde SQL Server (citas estado='-1')."""
         settings = get_settings()
 
-        def _query_mysql():
-            conn = pymysql.connect(
-                host=settings.antares_server,
-                port=settings.antares_port,
-                user="root",
-                password=settings.antares_password,
-                database="datosipspymr",
-                charset="latin1",
-            )
+        conn_str = (
+            f"DRIVER={{SQL Server}};"
+            f"SERVER={settings.antares_server},{settings.antares_port};"
+            f"DATABASE={settings.antares_database};"
+            f"UID={settings.antares_user};"
+            f"PWD={settings.antares_password};"
+            f"TrustServerCertificate=yes;"
+        )
+
+        def _query_db():
+            conn = pyodbc.connect(conn_str, timeout=30)
             try:
-                cursor = conn.cursor(pymysql.cursors.DictCursor)
-                # Convertir fechas MySQL para el query
-                # fechacita en MySQL es YYYYMMDDHHMM string
+                cursor = conn.cursor()
                 fechaini = date_from.replace("-", "") + "0000"
                 fechafin = date_to.replace("-", "") + "2359"
 
-                # Obtener slots disponibles para este CUPS
-                # Join con pxcita para filtrar por cups_code
                 cursor.execute("""
-                    SELECT c.idcita, c.fechacita, c.idmedico, c.entidad,
+                    SELECT TOP 200 c.idcita, c.fechacita, c.idmedico, c.entidad,
                            p.cups, c.estado
                     FROM citas c
                     LEFT JOIN pxcita p ON c.idcita = p.idcita
                     WHERE c.estado = '-1'
-                      AND c.fechacita >= %s
-                      AND c.fechacita <= %s
-                      AND (p.cups = %s OR c.IdServicio = %s)
+                      AND c.fechacita >= ?
+                      AND c.fechacita <= ?
+                      AND (p.cups = ? OR c.IdServicio = ?)
                     ORDER BY c.fechacita
-                    LIMIT 200
                 """, (fechaini, fechafin, service_code, service_code))
-                rows = cursor.fetchall()
-                return rows
+                columns = [col[0] for col in cursor.description] if cursor.description else []
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
             finally:
                 conn.close()
 
         executor = ThreadPoolExecutor(max_workers=1)
         loop = asyncio.get_event_loop()
-        rows = await loop.run_in_executor(executor, _query_mysql)
+        rows = await loop.run_in_executor(executor, _query_db)
         executor.shutdown(wait=False)
 
         # Agrupar por fecha y por doctor

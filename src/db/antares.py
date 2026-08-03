@@ -1,10 +1,6 @@
-"""Capa de acceso a datos MySQL (datosipspymr) — producción IPS Pastor y Maria.
+"""Capa de acceso a datos SQL Server (PastorYMaria) vía ODBC."""
 
-Todas las columnas en esta BD son LONGTEXT. Los valores numéricos son strings ("-1", "0", "20").
-Las fechas en citas.fechacita usan formato YYYYMMDDHHMM (ej: "202606140800").
-"""
-
-import pymysql
+import pyodbc
 import time
 from datetime import datetime, date, timedelta
 from contextlib import contextmanager
@@ -42,21 +38,42 @@ def _to_fechacita(dt) -> str:
 
 
 def _str_val(v, default=""):
-    """Normaliza LONGTEXT: None → default, strip."""
+    """Normaliza: None → default, strip."""
     if v is None:
         return default
     return str(v).strip()
 
 
 def _str_int(v, default=0) -> int:
-    """Convierte LONGTEXT numérico a int."""
+    """Convierte a int."""
     try:
         return int(_str_val(v, str(default)))
     except (ValueError, TypeError):
         return default
 
 
-# ── conexión ────────────────────────────────────────────────────────────
+# ── cursor que devuelve dicts (pyodbc devuelve Row, no dict) ──────────
+
+def _rows_to_dicts(cursor):
+    """Convierte todas las filas del cursor a lista de dicts."""
+    if not cursor.description:
+        return []
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _row_to_dict(cursor):
+    """Convierte una fila del cursor a dict."""
+    if not cursor.description:
+        return None
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
+
+
+# ── conexión ODBC ─────────────────────────────────────────────────────
 
 
 class AntaresDB:
@@ -67,30 +84,30 @@ class AntaresDB:
         self.database = settings.antares_database
         self.user = settings.antares_user
         self.password = settings.antares_password
+        self._conn_str = (
+            f"DRIVER={{SQL Server}};"
+            f"SERVER={self.host},{self.port};"
+            f"DATABASE={self.database};"
+            f"UID={self.user};"
+            f"PWD={self.password};"
+            f"TrustServerCertificate=yes;"
+        )
 
     @contextmanager
     def get_connection(self) -> Generator:
         conn = None
         try:
-            conn = pymysql.connect(
-                host=self.host,
-                port=self.port,
-                user=self.user,
-                password=self.password,
-                database=self.database,
-                charset="latin1",  # latin1 para recibir bytes UTF-8 crudos (datosipspymr usa latin1_swedish_ci)
-                init_command="SET NAMES utf8mb4",
-                cursorclass=pymysql.cursors.DictCursor,
-                connect_timeout=30,
-                read_timeout=120,
-                write_timeout=60,
+            conn = pyodbc.connect(
+                self._conn_str,
+                timeout=30,
+                autocommit=False,
             )
             yield conn
-        except pymysql.MySQLError as e:
-            logger.error("error_conexion_mysql",
-                         mensaje=f"Error al conectar a MySQL en {self.host}:{self.port}/{self.database}",
+        except pyodbc.Error as e:
+            logger.error("error_conexion_sqlserver",
+                         mensaje=f"Error al conectar a SQL Server en {self.host}:{self.port}/{self.database}",
                          error=str(e),
-                         sugerencia="Verifica que el servidor MySQL esté activo, "
+                         sugerencia="Verifica que el servidor SQL Server esté activo, "
                                     "que ANTARES_SERVER y ANTARES_PORT en .env sean correctos, "
                                     "y que el firewall permita la conexión")
             sync_status.record_mysql_ping(success=False, error=str(e))
@@ -100,11 +117,6 @@ class AntaresDB:
                 conn.close()
 
     def ping(self) -> tuple[bool, int, str]:
-        """Ejecuta un SELECT 1 para verificar que la conexión está viva.
-
-        Retorna:
-            (success, latency_ms, error_message)
-        """
         start = time.monotonic()
         try:
             with self.get_connection() as conn:
@@ -122,7 +134,6 @@ class AntaresDB:
     # ── SERVICIOS ──────────────────────────────────────────────────────
 
     def fetch_services(self) -> list[dict]:
-        """Catálogo CUPS desde codigossoat (solo consultas y procedimientos relevantes)."""
         import time
         start = time.monotonic()
         try:
@@ -146,24 +157,23 @@ class AntaresDB:
                     )
                     ORDER BY codigocups
                 """)
-                rows = cursor.fetchall()
-                duration_ms = int((time.monotonic() - start) * 1000)
-                sync_status.record_operation("fetch_services", success=True, records_processed=len(rows), duration_ms=duration_ms)
-                logger.info("fetch_servicios_ok",
-                            mensaje=f"Obtenidos {len(rows)} servicios CUPS desde MySQL",
-                            total=len(rows))
-                return rows
+                rows = _rows_to_dicts(cursor)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            sync_status.record_operation("fetch_services", success=True, records_processed=len(rows), duration_ms=duration_ms)
+            logger.info("fetch_servicios_ok",
+                        mensaje=f"Obtenidos {len(rows)} servicios CUPS desde SQL Server",
+                        total=len(rows))
+            return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_services", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
             logger.error("fetch_servicios_error",
-                         mensaje="Error al obtener servicios CUPS desde MySQL",
+                         mensaje="Error al obtener servicios CUPS desde SQL Server",
                          error=str(e))
             return []
 
-    # ── DOCTORES (virtuales, no hay tabla médicos) ─────────────────────
+    # ── DOCTORES ────────────────────────────────────────────────────────
 
-    # Mapeo de nombres obtenidos de BD_HealthNet + análisis de CUPS en pxcita
     DOCTOR_NAMES = {
         "10409903": ("Dra. Coromoto Villalobos Danielline", "Gastroenterología Pediátrica"),
         "1118814810": ("Dra. Cindy Arregoces Álvarez", "Endocrinología Pediátrica"),
@@ -193,7 +203,6 @@ class AntaresDB:
     }
 
     def fetch_doctors(self) -> list[dict]:
-        """Construye doctores desde citas_conf con nombres del mapeo DOCTOR_NAMES."""
         import time
         start = time.monotonic()
         try:
@@ -206,7 +215,7 @@ class AntaresDB:
                       AND c.idmedico IS NOT NULL
                       AND c.idmedico != ''
                 """)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
 
             doctors = []
             for r in rows:
@@ -237,15 +246,9 @@ class AntaresDB:
                          error=str(e))
             return []
 
-    # ── HORARIOS (schedules desde citas_conf) ──────────────────────────
+    # ── HORARIOS ────────────────────────────────────────────────────────
 
     def fetch_schedules(self) -> list[dict]:
-        """Convierte citas_conf → schedules semanales.
-
-        Cada config activa produce hasta 2 schedules por día (mañana y tarde).
-        Solo se usan las columnas NUEVAS en minúscula (hiniciom*, hfinalm*, hiniciot*, hfinalt*).
-        La fecha 1899-12-30 es dummy — solo importa la HORA.
-        """
         import time
         start = time.monotonic()
         try:
@@ -269,7 +272,7 @@ class AntaresDB:
                       AND idmedico IS NOT NULL
                       AND idmedico != ''
                 """)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
 
             schedules = []
             for r in rows:
@@ -282,7 +285,6 @@ class AntaresDB:
                     if trabaja != "-1":
                         continue
 
-                    # Mañana
                     h_ini_m = _extract_time(r.get(f"hiniciom{day_idx}"))
                     h_fin_m = _extract_time(r.get(f"hfinalm{day_idx}"))
                     if h_ini_m and h_fin_m:
@@ -295,7 +297,6 @@ class AntaresDB:
                             "is_active": is_active,
                         })
 
-                    # Tarde
                     h_ini_t = _extract_time(r.get(f"hiniciot{day_idx}"))
                     h_fin_t = _extract_time(r.get(f"hfinalt{day_idx}"))
                     if h_ini_t and h_fin_t:
@@ -326,19 +327,13 @@ class AntaresDB:
     # ── CITAS ───────────────────────────────────────────────────────────
 
     def fetch_new_appointments(self, last_sync: Optional[datetime] = None) -> list[dict]:
-        """Lee citas desde MySQL (citas JOIN pxcita).
-
-        Convierte fechacita YYYYMMDDHHMM → ISO datetime.
-        Mapea estado -1/0/1/4 → texto.
-        En la primera sincronización (last_sync=None), solo carga últimos 30 días.
-        """
         import time
         start = time.monotonic()
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 query = """
-                    SELECT
+                    SELECT TOP 5000
                         c.idcita AS id,
                         c.fechacita,
                         c.idmedico AS doctor_id,
@@ -367,19 +362,18 @@ class AntaresDB:
 
                 if last_sync:
                     since_str = last_sync.strftime("%Y%m%d%H%M")
-                    query += " WHERE c.fechacita > %s"
+                    query += " WHERE c.fechacita > ?"
                     params.append(since_str)
                 else:
-                    # Primera sincronización: solo últimos 30 días para no sobrecargar
                     from datetime import timedelta
                     since = datetime.now() - timedelta(days=30)
                     since_str = since.strftime("%Y%m%d%H%M")
-                    query += " WHERE c.fechacita > %s"
+                    query += " WHERE c.fechacita > ?"
                     params.append(since_str)
 
-                query += " ORDER BY c.fechacita ASC LIMIT 5000"
+                query += " ORDER BY c.fechacita ASC"
                 cursor.execute(query, params)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
 
             appointments = []
             for r in rows:
@@ -389,7 +383,6 @@ class AntaresDB:
 
                 iso_date = _parse_fechacita(r.get("fechacita"))
                 cups_code = _str_val(r.get("cups", ""))
-                # Si no hay CUPS, dejar service_code como None (no forzar "1")
                 svc_code = cups_code if cups_code else None
 
                 appointments.append({
@@ -416,7 +409,7 @@ class AntaresDB:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_appointments", success=True, records_processed=len(appointments), duration_ms=duration_ms)
             logger.info("fetch_citas_ok",
-                        mensaje=f"Obtenidas {len(appointments)} citas desde MySQL",
+                        mensaje=f"Obtenidas {len(appointments)} citas desde SQL Server",
                         total=len(appointments))
             return appointments
         except Exception as e:
@@ -458,15 +451,15 @@ class AntaresDB:
                 """
                 if updated_since:
                     since_str = updated_since.strftime("%Y-%m-%d %H:%M:%S")
-                    query += " WHERE fechamodificado > %s OR fechacreado > %s"
+                    query += " WHERE fechamodificado > ? OR fechacreado > ?"
                     cursor.execute(query, (since_str, since_str))
                 else:
                     cursor.execute(query)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_patients", success=True, records_processed=len(rows), duration_ms=duration_ms)
             logger.info("fetch_pacientes_ok",
-                        mensaje=f"Obtenidos {len(rows)} pacientes desde MySQL",
+                        mensaje=f"Obtenidos {len(rows)} pacientes desde SQL Server",
                         total=len(rows))
             return rows
         except Exception as e:
@@ -480,7 +473,6 @@ class AntaresDB:
     # ── NO DISPONIBILIDAD ──────────────────────────────────────────────
 
     def fetch_unavailability(self) -> list[dict]:
-        """Días exceptuados desde tblexepciondias."""
         import time
         start = time.monotonic()
         try:
@@ -499,7 +491,7 @@ class AntaresDB:
                     WHERE c.activo = '-1'
                     ORDER BY e.fecha DESC
                 """)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_unavailability", success=True, records_processed=len(rows), duration_ms=duration_ms)
             logger.info("fetch_no_disponibilidad_ok",
@@ -517,14 +509,13 @@ class AntaresDB:
     # ── LÍMITES DE PLAN ────────────────────────────────────────────────
 
     def fetch_plan_limits(self) -> list[dict]:
-        """Límites desde copagos."""
         import time
         start = time.monotonic()
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT
+                    SELECT TOP 20
                         nivel AS tercero_id,
                         '' AS plan_id,
                         0 AS max_citas_mes,
@@ -532,9 +523,8 @@ class AntaresDB:
                         CASE WHEN porccmod > '0' THEN 1 ELSE 0 END AS cobra_copago,
                         1 AS permite_cita_web
                     FROM copagos
-                    LIMIT 20
                 """)
-                rows = cursor.fetchall()
+                rows = _rows_to_dicts(cursor)
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_plan_limits", success=True, records_processed=len(rows), duration_ms=duration_ms)
             logger.info("fetch_limites_plan_ok",
@@ -549,47 +539,40 @@ class AntaresDB:
                          error=str(e))
             return []
 
-    # ── PUSH: INSERTAR CITA DESDE AGENDA → MYSQL ──────────────────────
+    # ── PUSH: INSERTAR CITA DESDE AGENDA → SQL Server ──────────────────
 
     def insert_cit(self, data: dict) -> bool:
-        """Inserta una cita creada por WhatsApp en la BD de producción.
-
-        Escribe en 2 tablas: citas + pxcita.
-        La admisión se asume ya creada o se crea aquí mismo.
-        """
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Generar idcita único
-            cursor.execute("SELECT MAX(CAST(idcita AS UNSIGNED)) FROM citas")
-            max_id = cursor.fetchone()
-            # MySQL dict cursor returns dict
-            max_val = list(max_id.values())[0] if max_id else 0
-            new_id = str((max_val or 0) + 1)
+            cursor.execute("SELECT MAX(CAST(idcita AS BIGINT)) FROM citas")
+            max_row = _row_to_dict(cursor)
+            max_val = 0
+            if max_row:
+                for v in max_row.values():
+                    if v is not None:
+                        max_val = int(v)
+                        break
+            new_id = str(max_val + 1)
 
             scheduled_dt = data.get("scheduled_date", "")
             fechacita = _to_fechacita(scheduled_dt)
             doctor_id = _str_val(data.get("doctor_id", ""))
             patient_id = _str_val(data.get("patient_id", ""))
             service_code = _str_val(data.get("service_code", ""))
-            # El CUPS real va en pxcita.cups. Si service_code no viene,
-            # fallback a appointment_type_desc que en la práctica también es el CUPS.
             cups_code = service_code or _str_val(data.get("appointment_type_desc", ""))
-            phone = _str_val(data.get("phone_contact", ""))
             obs = _str_val(data.get("observations", ""))
             created_by = _str_val(data.get("created_by", "WHATSAPP"))
             entidad = _str_val(data.get("eps_id", ""))
 
-            # 2. INSERT INTO citas — IdServicio se deja como '1' (categoría general)
-            # El CUPS específico del procedimiento vive en pxcita.cups, no aquí.
             cursor.execute("""
                 INSERT INTO citas (
                     idcita, fechacita, idmedico, numeropaciente, estado, cumplida,
                     IdServicio, entidad, observaciones, creadopor, fechamodificado,
                     cancelada, bloqueado, prioritaria, agenda, tasignada, pteatendido
                 ) VALUES (
-                    %s, %s, %s, %s, '0', '0',
-                    '1', %s, %s, %s, NOW(),
+                    ?, ?, ?, ?, '0', '0',
+                    '1', ?, ?, ?, GETDATE(),
                     '0', '0', '0', '0', '0', '0'
                 )
             """, (
@@ -597,16 +580,15 @@ class AntaresDB:
                 entidad, obs, created_by,
             ))
 
-            # 3. INSERT INTO pxcita — el CUPS real del procedimiento
             if cups_code:
                 cursor.execute("""
                     INSERT INTO pxcita (idcita, idservicio, cups, cantidad, vrunitario)
-                    VALUES (%s, %s, %s, '1', '0')
+                    VALUES (?, ?, ?, '1', '0')
                 """, (new_id, cups_code, cups_code))
 
             conn.commit()
             logger.info("insertar_cita_ok",
-                        mensaje="Cita insertada en MySQL",
+                        mensaje="Cita insertada en SQL Server",
                         id_cita=new_id,
                         fecha=fechacita)
             return True
@@ -618,25 +600,25 @@ class AntaresDB:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE citas SET estado = '4', cancelada = '-1',
-                   MotivoCancela = %s, fechacancelacion = DATE_FORMAT(NOW(), '%%Y%%m%%d'),
+                   MotivoCancela = ?, fechacancelacion = FORMAT(GETDATE(), 'yyyyMMdd'),
                    canceladapor = 'WHATSAPP'
-                   WHERE idcita = %s""",
+                   WHERE idcita = ?""",
                 (reason, appointment_id),
             )
             conn.commit()
             logger.info("cancelar_cita_ok",
-                        mensaje="Cita cancelada en MySQL",
+                        mensaje="Cita cancelada en SQL Server",
                         id_cita=appointment_id)
             return cursor.rowcount > 0
 
     def update_appointment_status(self, appointment_id: str, status: str) -> bool:
         status_map = {"agendada": "0", "atendida": "1", "cancelada": "4", "disponible": "-1"}
-        mysql_status = status_map.get(status, status)
+        sql_status = status_map.get(status, status)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE citas SET estado = %s WHERE idcita = %s",
-                (mysql_status, appointment_id),
+                "UPDATE citas SET estado = ? WHERE idcita = ?",
+                (sql_status, appointment_id),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -648,16 +630,14 @@ class AntaresDB:
             cursor = conn.cursor()
             paciente_id = _str_val(data.get("patient_id", data.get("document_number", "")))
 
-            # Verificar duplicado
-            cursor.execute("SELECT COUNT(*) AS cnt FROM pacientes WHERE numeropaciente = %s", (paciente_id,))
-            row = cursor.fetchone()
-            if row and list(row.values())[0] > 0:
+            cursor.execute("SELECT COUNT(*) AS cnt FROM pacientes WHERE numeropaciente = ?", (paciente_id,))
+            row = _row_to_dict(cursor)
+            if row and row.get("cnt", 0) > 0:
                 logger.info("crear_afiliado_omitir",
-                            mensaje="Afiliado ya existe en MySQL, omitiendo",
+                            mensaje="Afiliado ya existe en SQL Server, omitiendo",
                             id_paciente=paciente_id)
                 return paciente_id
 
-            # Construir texto de observaciones para datos que no tienen columna en MySQL
             extra_notes = []
             regimen = _str_val(data.get("regimen", ""))
             if regimen:
@@ -670,7 +650,6 @@ class AntaresDB:
                 extra_notes.append(f"Acudiente: {acudiente}")
             diagnostico_val = "; ".join(extra_notes) if extra_notes else ""
 
-            # zone y tipoafiliacion existen en MySQL pacientes (confirmado por SHOW COLUMNS)
             cursor.execute("""
                 INSERT INTO pacientes (
                     numeropaciente, tipoid, idpaciente,
@@ -679,7 +658,7 @@ class AntaresDB:
                     direccion, municipio, zona, tipoafiliacion,
                     entidadpaciente, diagnostico,
                     fechacreado, creadopor
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?)
             """, (
                 paciente_id,
                 _str_val(data.get("document_type", "CC")),
@@ -693,15 +672,15 @@ class AntaresDB:
                 _str_val(data.get("phone", "")),
                 _str_val(data.get("address", "")),
                 _str_val(data.get("city", "")),
-                _str_val(data.get("zone", "")),            # zona existe en MySQL
-                _str_val(data.get("affiliation_type", "")), # tipoafiliacion existe en MySQL
+                _str_val(data.get("zone", "")),
+                _str_val(data.get("affiliation_type", "")),
                 _str_val(data.get("eps_id", "")),
-                diagnostico_val,                             # regimen + affiliation + acudiente concatenados
+                diagnostico_val,
                 "WHATSAPP",
             ))
             conn.commit()
             logger.info("crear_afiliado_ok",
-                        mensaje="Afiliado creado en MySQL",
+                        mensaje="Afiliado creado en SQL Server",
                         id_paciente=paciente_id,
                         datos_extra=str(extra_notes))
             return paciente_id
@@ -715,24 +694,14 @@ antares_db = AntaresDB()
 # ── helper interno ──────────────────────────────────────────────────────
 
 def _extract_time(raw) -> Optional[str]:
-    """Extrae solo la HORA de un datetime dummy de citas_conf.
-
-    Las columnas hiniciomX/hfinalmX tienen valores como:
-      "1899-12-30 08:00:00"  →  "08:00:00"
-      "1899-12-30 14:30:00"  →  "14:30:00"
-      "0"                    →  None (no configurado)
-      "" / NULL              →  None
-    """
     if raw is None:
         return None
     s = str(raw).strip()
     if not s or s == "0":
         return None
-    # Intentar extraer HH:MM:SS del datetime
     parts = s.split(" ")
     if len(parts) >= 2:
         time_part = parts[1]
-        # Validar que tenga formato HH:MM:SS
         if ":" in time_part:
             return time_part
     return None

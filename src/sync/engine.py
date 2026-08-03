@@ -82,12 +82,12 @@ async def wait_for_mysql_with_backoff() -> bool:
     while True:
         attempt += 1
         logger.info("intento_conexion_mysql",
-                    mensaje=f"Intentando conectar a MySQL ({settings.antares_server}:{settings.antares_port})",
+                    mensaje=f"Intentando conectar a la base de datos ({settings.antares_server}:{settings.antares_port})",
                     intento=attempt)
         ok, latency, err = antares_db.ping()
         if ok:
             logger.info("conexion_mysql_exitosa",
-                        mensaje="Conexión a MySQL establecida correctamente",
+                        mensaje="Conexión a la base de datos establecida correctamente",
                         latencia_ms=latency,
                         intento=attempt)
             return True
@@ -95,11 +95,11 @@ async def wait_for_mysql_with_backoff() -> bool:
         wait_s = min(5 * (2 ** (attempt - 1)), 60)
         logger.warning(
             "fallo_conexion_mysql",
-            mensaje=f"No se pudo conectar a MySQL en {settings.antares_server}:{settings.antares_port}",
+            mensaje=f"No se pudo conectar a la base de datos en {settings.antares_server}:{settings.antares_port}",
             error=err,
             intento=attempt,
             reintento_en_s=wait_s,
-            sugerencia="Verifica que el servidor MySQL esté encendido, "
+            sugerencia="Verifica que el servidor de base de datos esté encendido, "
                        "que ANTARES_SERVER y ANTARES_PORT en .env sean correctos, "
                        "y que el firewall permita la conexión",
         )
