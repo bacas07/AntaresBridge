@@ -233,7 +233,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="badge-label">RUNNING</span>
       <span class="badge-time" id="svc-uptime">—</span>
     </div>
-    <!-- MySQL -->
+    <!-- SQL Server -->
     <div class="status-badge" id="badge-mysql">
       <span class="badge-dot gray" id="mysql-dot"></span>
       <span class="badge-label" id="mysql-label">CARGANDO...</span>
@@ -294,7 +294,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="container">
-  <div class="section-title">Push Inverso — Citas hacia MySQL</div>
+  <div class="section-title">Push Inverso — Citas hacia SQL Server</div>
   <div class="card">
     <table>
       <thead>
@@ -342,7 +342,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetch_plan_limits: 'Límites de Plan',
     fetch_patients: 'Pacientes',
     fetch_appointments: 'Citas',
-    push_to_antares: 'Push → MySQL',
+    push_to_antares: 'Push → SQL Server',
   };
 
   var ALL_OPS = [
@@ -364,10 +364,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var mysqlLabel = document.getElementById('mysql-label');
     if (mysql.connected) {
       mysqlDot.className = 'badge-dot green';
-      mysqlLabel.textContent = 'MySQL OK';
+      mysqlLabel.textContent = 'SQL Server OK';
     } else {
       mysqlDot.className = 'badge-dot red';
-      mysqlLabel.textContent = 'MySQL ERROR';
+      mysqlLabel.textContent = 'SQL Server ERROR';
     }
     document.getElementById('mysql-time').textContent =
       mysql.last_ping ? toColombia(mysql.last_ping) : '—';
@@ -419,7 +419,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var pushPillTxt = push.success ? 'OK' : (push.last_attempt ? 'ERROR' : '—');
     pushTbody.innerHTML = push.last_attempt != null
       ? '<tr class="' + pushRowClass + '">' +
-          '<td>Push → MySQL</td>' +
+          '<td>Push → SQL Server</td>' +
           '<td class="mono small">' + toColombia(push.last_attempt) + '</td>' +
           '<td><span class="pill ' + pushPill + '">' + pushPillTxt + '</span></td>' +
           '<td>' + (push.records_processed != null ? push.records_processed : '—') + '</td>' +

@@ -73,7 +73,7 @@ class SyncStatus:
         )
 
     def record_mysql_ping(self, success: bool, latency_ms: int = 0, error: str = ""):
-        """Registra el resultado de un ping a MySQL."""
+        """Registra el resultado de un ping a SQL Server."""
         self.mysql_last_ping = datetime.now(timezone.utc).isoformat()
         self.mysql_connected = success
         self.mysql_ping_latency_ms = latency_ms
