@@ -1,6 +1,6 @@
-"""Capa de acceso a datos SQL Server (PastorYMaria) vía ODBC."""
+"""Capa de acceso a datos MySQL 8.0 (datosipspymr) vía PyMySQL."""
 
-import pyodbc
+import pymysql
 import time
 from datetime import datetime, date, timedelta
 from contextlib import contextmanager
@@ -52,7 +52,7 @@ def _str_int(v, default=0) -> int:
         return default
 
 
-# ── cursor que devuelve dicts (pyodbc devuelve Row, no dict) ──────────
+# ── cursor que devuelve dicts (pymysql devuelve tuple, no dict) ────────
 
 def _rows_to_dicts(cursor):
     """Convierte todas las filas del cursor a lista de dicts."""
@@ -84,30 +84,27 @@ class AntaresDB:
         self.database = settings.antares_database
         self.user = settings.antares_user
         self.password = settings.antares_password
-        self._conn_str = (
-            f"DRIVER={{SQL Server}};"
-            f"SERVER={self.host},{self.port};"
-            f"DATABASE={self.database};"
-            f"UID={self.user};"
-            f"PWD={self.password};"
-            f"TrustServerCertificate=yes;"
-        )
 
     @contextmanager
     def get_connection(self) -> Generator:
         conn = None
         try:
-            conn = pyodbc.connect(
-                self._conn_str,
-                timeout=30,
+            conn = pymysql.connect(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                charset="utf8mb4",
                 autocommit=False,
+                connect_timeout=30,
             )
             yield conn
-        except pyodbc.Error as e:
-            logger.error("error_conexion_sqlserver",
-                         mensaje=f"Error al conectar a SQL Server en {self.host}:{self.port}/{self.database}",
+        except pymysql.MySQLError as e:
+            logger.error("error_conexion_mysql",
+                         mensaje=f"Error al conectar a MySQL en {self.host}:{self.port}/{self.database}",
                          error=str(e),
-                         sugerencia="Verifica que el servidor SQL Server esté activo, "
+                         sugerencia="Verifica que el servidor MySQL esté activo, "
                                     "que ANTARES_SERVER y ANTARES_PORT en .env sean correctos, "
                                     "y que el firewall permita la conexión")
             sync_status.record_mysql_ping(success=False, error=str(e))
@@ -161,14 +158,14 @@ class AntaresDB:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_services", success=True, records_processed=len(rows), duration_ms=duration_ms)
             logger.info("fetch_servicios_ok",
-                        mensaje=f"Obtenidos {len(rows)} servicios CUPS desde SQL Server",
+                        mensaje=f"Obtenidos {len(rows)} servicios CUPS desde MySQL",
                         total=len(rows))
             return rows
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_services", success=False, records_processed=0, error_message=str(e), duration_ms=duration_ms)
             logger.error("fetch_servicios_error",
-                         mensaje="Error al obtener servicios CUPS desde SQL Server",
+                         mensaje="Error al obtener servicios CUPS desde MySQL",
                          error=str(e))
             return []
 
@@ -333,7 +330,7 @@ class AntaresDB:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 query = """
-                    SELECT TOP 5000
+                    SELECT
                         c.idcita AS id,
                         c.fechacita,
                         c.idmedico AS doctor_id,
@@ -362,16 +359,16 @@ class AntaresDB:
 
                 if last_sync:
                     since_str = last_sync.strftime("%Y%m%d%H%M")
-                    query += " WHERE c.fechacita > ?"
+                    query += " WHERE c.fechacita > %s"
                     params.append(since_str)
                 else:
                     from datetime import timedelta
                     since = datetime.now() - timedelta(days=30)
                     since_str = since.strftime("%Y%m%d%H%M")
-                    query += " WHERE c.fechacita > ?"
+                    query += " WHERE c.fechacita > %s"
                     params.append(since_str)
 
-                query += " ORDER BY c.fechacita ASC"
+                query += " ORDER BY c.fechacita ASC LIMIT 5000"
                 cursor.execute(query, params)
                 rows = _rows_to_dicts(cursor)
 
@@ -409,7 +406,7 @@ class AntaresDB:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_appointments", success=True, records_processed=len(appointments), duration_ms=duration_ms)
             logger.info("fetch_citas_ok",
-                        mensaje=f"Obtenidas {len(appointments)} citas desde SQL Server",
+                        mensaje=f"Obtenidas {len(appointments)} citas desde MySQL",
                         total=len(appointments))
             return appointments
         except Exception as e:
@@ -451,7 +448,7 @@ class AntaresDB:
                 """
                 if updated_since:
                     since_str = updated_since.strftime("%Y-%m-%d %H:%M:%S")
-                    query += " WHERE fechamodificado > ? OR fechacreado > ?"
+                    query += " WHERE fechamodificado > %s OR fechacreado > %s"
                     cursor.execute(query, (since_str, since_str))
                 else:
                     cursor.execute(query)
@@ -459,7 +456,7 @@ class AntaresDB:
             duration_ms = int((time.monotonic() - start) * 1000)
             sync_status.record_operation("fetch_patients", success=True, records_processed=len(rows), duration_ms=duration_ms)
             logger.info("fetch_pacientes_ok",
-                        mensaje=f"Obtenidos {len(rows)} pacientes desde SQL Server",
+                        mensaje=f"Obtenidos {len(rows)} pacientes desde MySQL",
                         total=len(rows))
             return rows
         except Exception as e:
@@ -515,7 +512,7 @@ class AntaresDB:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT TOP 20
+                    SELECT
                         nivel AS tercero_id,
                         '' AS plan_id,
                         0 AS max_citas_mes,
@@ -523,6 +520,7 @@ class AntaresDB:
                         CASE WHEN porccmod > '0' THEN 1 ELSE 0 END AS cobra_copago,
                         1 AS permite_cita_web
                     FROM copagos
+                    LIMIT 20
                 """)
                 rows = _rows_to_dicts(cursor)
             duration_ms = int((time.monotonic() - start) * 1000)
@@ -539,13 +537,13 @@ class AntaresDB:
                          error=str(e))
             return []
 
-    # ── PUSH: INSERTAR CITA DESDE AGENDA → SQL Server ──────────────────
+    # ── PUSH: INSERTAR CITA DESDE AGENDA → MySQL ──────────────────
 
     def insert_cit(self, data: dict) -> bool:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute("SELECT MAX(CAST(idcita AS BIGINT)) FROM citas")
+            cursor.execute("SELECT MAX(CAST(idcita AS SIGNED)) FROM citas")
             max_row = _row_to_dict(cursor)
             max_val = 0
             if max_row:
@@ -571,8 +569,8 @@ class AntaresDB:
                     IdServicio, entidad, observaciones, creadopor, fechamodificado,
                     cancelada, bloqueado, prioritaria, agenda, tasignada, pteatendido
                 ) VALUES (
-                    ?, ?, ?, ?, '0', '0',
-                    '1', ?, ?, ?, GETDATE(),
+                    %s, %s, %s, %s, '0', '0',
+                    '1', %s, %s, %s, NOW(),
                     '0', '0', '0', '0', '0', '0'
                 )
             """, (
@@ -583,12 +581,12 @@ class AntaresDB:
             if cups_code:
                 cursor.execute("""
                     INSERT INTO pxcita (idcita, idservicio, cups, cantidad, vrunitario)
-                    VALUES (?, ?, ?, '1', '0')
+                    VALUES (%s, %s, %s, '1', '0')
                 """, (new_id, cups_code, cups_code))
 
             conn.commit()
             logger.info("insertar_cita_ok",
-                        mensaje="Cita insertada en SQL Server",
+                        mensaje="Cita insertada en MySQL",
                         id_cita=new_id,
                         fecha=fechacita)
             return True
@@ -600,14 +598,14 @@ class AntaresDB:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE citas SET estado = '4', cancelada = '-1',
-                   MotivoCancela = ?, fechacancelacion = FORMAT(GETDATE(), 'yyyyMMdd'),
+                   MotivoCancela = %s, fechacancelacion = DATE_FORMAT(NOW(), '%%Y%%m%%d'),
                    canceladapor = 'WHATSAPP'
-                   WHERE idcita = ?""",
+                   WHERE idcita = %s""",
                 (reason, appointment_id),
             )
             conn.commit()
             logger.info("cancelar_cita_ok",
-                        mensaje="Cita cancelada en SQL Server",
+                        mensaje="Cita cancelada en MySQL",
                         id_cita=appointment_id)
             return cursor.rowcount > 0
 
@@ -617,7 +615,7 @@ class AntaresDB:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE citas SET estado = ? WHERE idcita = ?",
+                "UPDATE citas SET estado = %s WHERE idcita = %s",
                 (sql_status, appointment_id),
             )
             conn.commit()
@@ -630,11 +628,11 @@ class AntaresDB:
             cursor = conn.cursor()
             paciente_id = _str_val(data.get("patient_id", data.get("document_number", "")))
 
-            cursor.execute("SELECT COUNT(*) AS cnt FROM pacientes WHERE numeropaciente = ?", (paciente_id,))
+            cursor.execute("SELECT COUNT(*) AS cnt FROM pacientes WHERE numeropaciente = %s", (paciente_id,))
             row = _row_to_dict(cursor)
             if row and row.get("cnt", 0) > 0:
                 logger.info("crear_afiliado_omitir",
-                            mensaje="Afiliado ya existe en SQL Server, omitiendo",
+                            mensaje="Afiliado ya existe en MySQL, omitiendo",
                             id_paciente=paciente_id)
                 return paciente_id
 
@@ -658,7 +656,7 @@ class AntaresDB:
                     direccion, municipio, zona, tipoafiliacion,
                     entidadpaciente, diagnostico,
                     fechacreado, creadopor
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
             """, (
                 paciente_id,
                 _str_val(data.get("document_type", "CC")),
@@ -680,7 +678,7 @@ class AntaresDB:
             ))
             conn.commit()
             logger.info("crear_afiliado_ok",
-                        mensaje="Afiliado creado en SQL Server",
+                        mensaje="Afiliado creado en MySQL",
                         id_paciente=paciente_id,
                         datos_extra=str(extra_notes))
             return paciente_id

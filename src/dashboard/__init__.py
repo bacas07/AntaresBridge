@@ -1,7 +1,7 @@
 """Dashboard HTTP para antares-bridge — puerto 8001."""
 
 import asyncio
-import pyodbc
+import pymysql
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from fastapi import FastAPI, Query
@@ -233,7 +233,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="badge-label">RUNNING</span>
       <span class="badge-time" id="svc-uptime">—</span>
     </div>
-    <!-- SQL Server -->
+    <!-- MySQL -->
     <div class="status-badge" id="badge-mysql">
       <span class="badge-dot gray" id="mysql-dot"></span>
       <span class="badge-label" id="mysql-label">CARGANDO...</span>
@@ -294,7 +294,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="container">
-  <div class="section-title">Push Inverso — Citas hacia SQL Server</div>
+  <div class="section-title">Push Inverso — Citas hacia MySQL</div>
   <div class="card">
     <table>
       <thead>
@@ -342,7 +342,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetch_plan_limits: 'Límites de Plan',
     fetch_patients: 'Pacientes',
     fetch_appointments: 'Citas',
-    push_to_antares: 'Push → SQL Server',
+    push_to_antares: 'Push → MySQL',
   };
 
   var ALL_OPS = [
@@ -364,10 +364,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var mysqlLabel = document.getElementById('mysql-label');
     if (mysql.connected) {
       mysqlDot.className = 'badge-dot green';
-      mysqlLabel.textContent = 'SQL Server OK';
+      mysqlLabel.textContent = 'MySQL OK';
     } else {
       mysqlDot.className = 'badge-dot red';
-      mysqlLabel.textContent = 'SQL Server ERROR';
+      mysqlLabel.textContent = 'MySQL ERROR';
     }
     document.getElementById('mysql-time').textContent =
       mysql.last_ping ? toColombia(mysql.last_ping) : '—';
@@ -419,7 +419,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var pushPillTxt = push.success ? 'OK' : (push.last_attempt ? 'ERROR' : '—');
     pushTbody.innerHTML = push.last_attempt != null
       ? '<tr class="' + pushRowClass + '">' +
-          '<td>Push → SQL Server</td>' +
+          '<td>Push → MySQL</td>' +
           '<td class="mono small">' + toColombia(push.last_attempt) + '</td>' +
           '<td><span class="pill ' + pushPill + '">' + pushPillTxt + '</span></td>' +
           '<td>' + (push.records_processed != null ? push.records_processed : '—') + '</td>' +
@@ -499,35 +499,36 @@ def create_dashboard_app() -> FastAPI:
         date_from: str = Query(..., description="Fecha inicio YYYY-MM-DD"),
         date_to: str = Query(..., description="Fecha fin YYYY-MM-DD"),
     ):
-        """Consulta disponibilidad real desde SQL Server (citas estado='-1')."""
+        """Consulta disponibilidad real desde MySQL (citas estado='-1')."""
         settings = get_settings()
 
-        conn_str = (
-            f"DRIVER={{SQL Server}};"
-            f"SERVER={settings.antares_server},{settings.antares_port};"
-            f"DATABASE={settings.antares_database};"
-            f"UID={settings.antares_user};"
-            f"PWD={settings.antares_password};"
-            f"TrustServerCertificate=yes;"
-        )
-
         def _query_db():
-            conn = pyodbc.connect(conn_str, timeout=30)
+            conn = pymysql.connect(
+                host=settings.antares_server,
+                port=settings.antares_port,
+                user=settings.antares_user,
+                password=settings.antares_password,
+                database=settings.antares_database,
+                charset="utf8mb4",
+                autocommit=False,
+                connect_timeout=30,
+            )
             try:
                 cursor = conn.cursor()
                 fechaini = date_from.replace("-", "") + "0000"
                 fechafin = date_to.replace("-", "") + "2359"
 
                 cursor.execute("""
-                    SELECT TOP 200 c.idcita, c.fechacita, c.idmedico, c.entidad,
+                    SELECT c.idcita, c.fechacita, c.idmedico, c.entidad,
                            p.cups, c.estado
                     FROM citas c
                     LEFT JOIN pxcita p ON c.idcita = p.idcita
                     WHERE c.estado = '-1'
-                      AND c.fechacita >= ?
-                      AND c.fechacita <= ?
-                      AND (p.cups = ? OR c.IdServicio = ?)
+                      AND c.fechacita >= %s
+                      AND c.fechacita <= %s
+                      AND (p.cups = %s OR c.IdServicio = %s)
                     ORDER BY c.fechacita
+                    LIMIT 200
                 """, (fechaini, fechafin, service_code, service_code))
                 columns = [col[0] for col in cursor.description] if cursor.description else []
                 return [dict(zip(columns, row)) for row in cursor.fetchall()]
