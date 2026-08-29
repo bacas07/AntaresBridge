@@ -397,13 +397,20 @@ class SyncEngine:
                     for appt in appointments_to_push:
                         if appt.get("source") in ("whatsapp", "system"):
                             try:
-                                antares_db.insert_cit(appt)
+                                status = str(appt.get("status") or "").strip().lower()
+                                if status == "cancelada":
+                                    antares_db.cancel_appointment(
+                                        appt.get("id", ""),
+                                        appt.get("appointment_type_desc", "") or "Cancelada por WhatsApp",
+                                    )
+                                else:
+                                    antares_db.insert_cit(appt)
                                 pushed_ids.append(appt["id"])
                                 push_success += 1
                             except Exception as e:
                                 push_failed += 1
                                 logger.error("sync_push_inverso_fallo",
-                                             mensaje="Fallo al insertar cita en MySQL",
+                                             mensaje="Fallo al escribir cita en MySQL",
                                              id_cita=appt.get("id"),
                                              error=str(e))
                     if pushed_ids:

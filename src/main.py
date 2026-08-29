@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import traceback
 
@@ -58,6 +59,29 @@ async def main():
     )
 
 
+def _is_interactive() -> bool:
+    """True si hay una consola real (uso manual).
+
+    Bajo Task Scheduler/SYSTEM no hay tty: devuelve False para que los
+    errores fatales salgan con codigo != 0 y el scheduler reinicie el proceso.
+    """
+    flag = os.environ.get("BRIDGE_NONINTERACTIVE", "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return False
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _pause():
+    if _is_interactive():
+        try:
+            input("Presiona Enter para salir...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
@@ -65,9 +89,12 @@ if __name__ == "__main__":
         print()
         print("ERROR: El archivo .env tiene valores inválidos.")
         print(f"  Detalle: {e}")
-        print("  Revisa que los números sean números (ej: ANTARES_PORT=1433)")
+        print("  Revisa que los números sean números (ej: ANTARES_PORT=3306)")
         print()
-        input("Presiona Enter para salir...")
+        logger.error("error_config_env",
+                     mensaje="El archivo .env tiene valores inválidos",
+                     detalle=str(e))
+        _pause()
         sys.exit(1)
     except OSError as e:
         print()
@@ -80,14 +107,17 @@ if __name__ == "__main__":
         logger.error("error_fatal_arranque",
                      mensaje="Error fatal al iniciar el servidor",
                      error=str(e))
-        input("Presiona Enter para salir...")
+        _pause()
         sys.exit(1)
     except RuntimeError as e:
         print()
         print(f"ERROR DE CONFIGURACIÓN: {e}")
         print("  Revisa que todas las variables en .env tengan valor.")
         print()
-        input("Presiona Enter para salir...")
+        logger.error("error_config_faltante",
+                     mensaje="Faltan variables de entorno críticas",
+                     error=str(e))
+        _pause()
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nAntares Bridge detenido por el usuario.")
@@ -97,5 +127,8 @@ if __name__ == "__main__":
         print()
         traceback.print_exc()
         print()
-        input("Presiona Enter para salir...")
+        logger.error("error_fatal_inesperado",
+                     mensaje="Error inesperado en el bridge",
+                     error=str(e))
+        _pause()
         sys.exit(1)

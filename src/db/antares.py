@@ -99,8 +99,8 @@ class AntaresDB:
                 autocommit=False,
                 connect_timeout=30,
             )
-            yield conn
         except pymysql.MySQLError as e:
+            # Solo errores de CONEXIÓN (no errores de datos de una query).
             logger.error("error_conexion_mysql",
                          mensaje=f"Error al conectar a MySQL en {self.host}:{self.port}/{self.database}",
                          error=str(e),
@@ -109,9 +109,10 @@ class AntaresDB:
                                     "y que el firewall permita la conexión")
             sync_status.record_mysql_ping(success=False, error=str(e))
             raise
+        try:
+            yield conn
         finally:
-            if conn:
-                conn.close()
+            conn.close()
 
     def ping(self) -> tuple[bool, int, str]:
         start = time.monotonic()
@@ -537,56 +538,113 @@ class AntaresDB:
                          error=str(e))
             return []
 
-    # ── PUSH: INSERTAR CITA DESDE AGENDA → MySQL ──────────────────
+    # ── PUSH: INSERTAR/ACTUALIZAR CITA DESDE AGENDA → MySQL ──────────
+
+    def _resolve_numeropaciente(self, cursor, data: dict) -> str:
+        """Resuelve el numeropaciente (int) de Antares a partir del documento
+        o del patient_id numérico. Crea el paciente si no existe."""
+        document_number = _str_val(data.get("patient_document_number", data.get("document_number", "")))
+        document_type = _str_val(data.get("patient_document_type", data.get("document_type", "CC")), "CC")
+        patient_id = _str_val(data.get("patient_id", ""))
+
+        # 1. Si ya viene un id numérico de Antares, usarlo.
+        if patient_id.isdigit():
+            return patient_id
+
+        # 2. Buscar por número de documento.
+        if document_number:
+            cursor.execute(
+                "SELECT numeropaciente FROM pacientes WHERE idpaciente = %s LIMIT 1",
+                (document_number,),
+            )
+            row = _row_to_dict(cursor)
+            if row and row.get("numeropaciente") is not None:
+                return str(int(row["numeropaciente"]))
+
+        # 3. Sin documento no hay forma de resolver.
+        if not document_number:
+            raise ValueError("No se pudo resolver el paciente: sin id numérico ni documento")
+
+        # 4. Crear paciente nuevo (numeropaciente es auto_increment).
+        cursor.execute("""
+            INSERT INTO pacientes (
+                tipoid, idpaciente, nombre1, nombre2, apellido1, apellido2,
+                telefono, entidadpaciente, creadopor, fechacreado
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, NOW())
+        """, (
+            document_type[:2],
+            document_number[:20],
+            _str_val(data.get("patient_first_name", data.get("first_name", "")))[:20],
+            _str_val(data.get("patient_second_name", data.get("second_name", "")))[:20],
+            _str_val(data.get("patient_last_name1", data.get("last_name1", "")))[:30],
+            _str_val(data.get("patient_last_name2", data.get("last_name2", "")))[:30],
+            _str_val(data.get("patient_phone", data.get("phone", "")))[:30],
+            _str_val(data.get("patient_eps_id", data.get("eps_id", "")))[:14],
+        ))
+        return str(cursor.lastrowid)
 
     def insert_cit(self, data: dict) -> bool:
+        """Inserta o actualiza una cita en MySQL (cita creada desde la agenda)."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-
-            cursor.execute("SELECT MAX(CAST(idcita AS SIGNED)) FROM citas")
-            max_row = _row_to_dict(cursor)
-            max_val = 0
-            if max_row:
-                for v in max_row.values():
-                    if v is not None:
-                        max_val = int(v)
-                        break
-            new_id = str(max_val + 1)
 
             scheduled_dt = data.get("scheduled_date", "")
             fechacita = _to_fechacita(scheduled_dt)
             doctor_id = _str_val(data.get("doctor_id", ""))
-            patient_id = _str_val(data.get("patient_id", ""))
             service_code = _str_val(data.get("service_code", ""))
             cups_code = service_code or _str_val(data.get("appointment_type_desc", ""))
             obs = _str_val(data.get("observations", ""))
-            created_by = _str_val(data.get("created_by", "WHATSAPP"))
-            entidad = _str_val(data.get("eps_id", ""))
+            entidad = _str_val(data.get("patient_eps_id", data.get("eps_id", "")))
 
-            cursor.execute("""
-                INSERT INTO citas (
-                    idcita, fechacita, idmedico, numeropaciente, estado, cumplida,
-                    IdServicio, entidad, observaciones, creadopor, fechamodificado,
-                    cancelada, bloqueado, prioritaria, agenda, tasignada, pteatendido
-                ) VALUES (
-                    %s, %s, %s, %s, '0', '0',
-                    '1', %s, %s, %s, NOW(),
-                    '0', '0', '0', '0', '0', '0'
-                )
-            """, (
-                new_id, fechacita, doctor_id, patient_id,
-                entidad, obs, created_by,
-            ))
+            # Resolver paciente → numeropaciente numérico (INT).
+            patient_id = self._resolve_numeropaciente(cursor, data)
+
+            # Si el id es un idcita numérico existente → actualizar el slot (booking real).
+            raw_id = _str_val(data.get("id", ""))
+            existing_idcita = None
+            if raw_id.isdigit():
+                cursor.execute("SELECT idcita FROM citas WHERE idcita = %s", (int(raw_id),))
+                r = _row_to_dict(cursor)
+                if r and r.get("idcita") is not None:
+                    existing_idcita = str(int(r["idcita"]))
+
+            if existing_idcita:
+                cursor.execute("""
+                    UPDATE citas SET estado = '0', numeropaciente = %s, idmedico = %s,
+                        IdServicio = '1', entidad = %s, observaciones = %s,
+                        fechamodificado = NOW()
+                    WHERE idcita = %s
+                """, (patient_id, doctor_id, entidad, obs, existing_idcita))
+                new_id = existing_idcita
+            else:
+                cursor.execute("""
+                    INSERT INTO citas (
+                        fechacita, idmedico, numeropaciente, estado, cumplida,
+                        IdServicio, entidad, observaciones, creadopor, fechamodificado,
+                        cancelada, bloqueado, prioritaria, agenda, tasignada, pteatendido
+                    ) VALUES (
+                        %s, %s, %s, '0', '0',
+                        '1', %s, %s, 0, NOW(),
+                        '0', '0', '0', '0', '0', '0'
+                    )
+                """, (fechacita, doctor_id, patient_id, entidad, obs))
+                new_id = str(cursor.lastrowid)
 
             if cups_code:
-                cursor.execute("""
-                    INSERT INTO pxcita (idcita, idservicio, cups, cantidad, vrunitario)
-                    VALUES (%s, %s, %s, '1', '0')
-                """, (new_id, cups_code, cups_code))
+                cursor.execute(
+                    "SELECT COUNT(*) AS cnt FROM pxcita WHERE idcita = %s AND cups = %s",
+                    (new_id, cups_code),
+                )
+                pr = _row_to_dict(cursor)
+                if not pr or int(pr.get("cnt", 0)) == 0:
+                    cursor.execute("""
+                        INSERT INTO pxcita (idcita, idservicio, cups, cantidad, vrunitario)
+                        VALUES (%s, %s, %s, '1', '0')
+                    """, (new_id, cups_code, cups_code))
 
             conn.commit()
             logger.info("insertar_cita_ok",
-                        mensaje="Cita insertada en MySQL",
+                        mensaje="Cita guardada en MySQL",
                         id_cita=new_id,
                         fecha=fechacita)
             return True
@@ -598,8 +656,8 @@ class AntaresDB:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE citas SET estado = '4', cancelada = '-1',
-                   MotivoCancela = %s, fechacancelacion = DATE_FORMAT(NOW(), '%%Y%%m%%d'),
-                   canceladapor = 'WHATSAPP'
+                   MotivoCancela = 0, fechacancelacion = NOW(), canceladapor = 0,
+                   observaciones = CONCAT(IFNULL(observaciones, ''), ' CANCELADO: ', %s)
                    WHERE idcita = %s""",
                 (reason, appointment_id),
             )
