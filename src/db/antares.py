@@ -52,6 +52,16 @@ def _str_int(v, default=0) -> int:
         return default
 
 
+def _datetime_iso(v) -> Optional[str]:
+    """Convierte datetime/date/timestamp a string ISO, o None."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    s = str(v).strip()
+    return s or None
+
+
 # ── cursor que devuelve dicts (pymysql devuelve tuple, no dict) ────────
 
 def _rows_to_dicts(cursor):
@@ -200,6 +210,25 @@ class AntaresDB:
         "91430553": ("Dr. Psiquiatría (91430553)", "Psiquiatría"),
     }
 
+    # idespecialidad de Antares (tabla especialidades) por especialidad.
+    SPECIALTY_CODES = {
+        "Gastroenterología Pediátrica": "114",
+        "Endocrinología Pediátrica": "117",
+        "Pediatría": "107",
+        "Neuropsicología": "111",
+        "Neurología Pediátrica": "106",
+        "Psiquiatría Pediátrica": "116",
+        "Nutrición": "120",
+        "Psicología": "121",
+        "Dermatología Pediátrica": "112",
+        "Nefrología Pediátrica": "118",
+        "Ortopedia Pediátrica": "108",
+        "Cardiología Pediátrica": "113",
+        "Neumología Pediátrica": "119",
+        "Dermatología": "112",
+        "Psiquiatría": "122",
+    }
+
     def fetch_doctors(self) -> list[dict]:
         import time
         start = time.monotonic()
@@ -222,7 +251,7 @@ class AntaresDB:
                 doctors.append({
                     "id": doc_id,
                     "name": name,
-                    "specialty_id": "",
+                    "specialty_id": self.SPECIALTY_CODES.get(specialty, ""),
                     "specialty_name": specialty,
                     "phone": "",
                     "email": "",
@@ -267,6 +296,7 @@ class AntaresDB:
                         hiniciom6, hfinalm6, hiniciot6, hfinalt6
                     FROM citas_conf
                     WHERE activo = '-1'
+                      AND idagenda = 0
                       AND idmedico IS NOT NULL
                       AND idmedico != ''
                 """)
@@ -283,12 +313,15 @@ class AntaresDB:
                     if trabaja != "-1":
                         continue
 
+                    # Antares usa 0=domingo; el API/agenda usa 0=lunes.
+                    day_of_week = (day_idx + 6) % 7
+
                     h_ini_m = _extract_time(r.get(f"hiniciom{day_idx}"))
                     h_fin_m = _extract_time(r.get(f"hfinalm{day_idx}"))
                     if h_ini_m and h_fin_m:
                         schedules.append({
                             "doctor_id": doctor_id,
-                            "day_of_week": day_idx,
+                            "day_of_week": day_of_week,
                             "start_time": h_ini_m,
                             "end_time": h_fin_m,
                             "slot_duration": slot_dur,
@@ -300,7 +333,7 @@ class AntaresDB:
                     if h_ini_t and h_fin_t:
                         schedules.append({
                             "doctor_id": doctor_id,
-                            "day_of_week": day_idx,
+                            "day_of_week": day_of_week,
                             "start_time": h_ini_t,
                             "end_time": h_fin_t,
                             "slot_duration": slot_dur,
@@ -334,6 +367,7 @@ class AntaresDB:
                     SELECT
                         c.idcita AS id,
                         c.fechacita,
+                        c.fechasolicitud,
                         c.idmedico AS doctor_id,
                         c.numeropaciente AS patient_id,
                         c.IdServicio AS service_code,
@@ -351,10 +385,11 @@ class AntaresDB:
                         c.bloqueado,
                         c.prioritaria,
                         c.turnos,
-                        pxc.cups,
-                        pxc.idservicio AS pxc_servicio
+                        (SELECT pxc.cups FROM pxcita pxc
+                          WHERE pxc.idcita = c.idcita
+                          ORDER BY pxc.registrono
+                          LIMIT 1) AS cups
                     FROM citas c
-                    LEFT JOIN pxcita pxc ON c.idcita = pxc.idcita
                 """
                 params = []
 
@@ -381,7 +416,7 @@ class AntaresDB:
 
                 iso_date = _parse_fechacita(r.get("fechacita"))
                 cups_code = _str_val(r.get("cups", ""))
-                svc_code = cups_code if cups_code else None
+                svc_code = cups_code or _str_val(r.get("service_code", "")) or None
 
                 appointments.append({
                     "id": _str_val(r["id"]),
@@ -400,8 +435,8 @@ class AntaresDB:
                     "observations": _str_val(r.get("observations", "")),
                     "source": "antares",
                     "diagnosis_code": cups_code,
-                    "created_at": iso_date,
-                    "updated_at": _parse_fechacita(r.get("updated_at")) or iso_date,
+                    "created_at": _datetime_iso(r.get("fechasolicitud")) or iso_date,
+                    "updated_at": _datetime_iso(r.get("updated_at")) or iso_date,
                 })
 
             duration_ms = int((time.monotonic() - start) * 1000)
