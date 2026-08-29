@@ -652,6 +652,13 @@ class AntaresDB:
     # ── CANCELAR ───────────────────────────────────────────────────────
 
     def cancel_appointment(self, appointment_id: str, reason: str) -> bool:
+        # idcita en Antares es INT. Los ids UUID de la agenda (reserva directa)
+        # no existen en Antares, así que no hay nada que cancelar.
+        if not _str_val(appointment_id, "").isdigit():
+            logger.info("cancelar_cita_omitir",
+                        mensaje="id de cita no numérico (reserva directa), no hay nada que cancelar en MySQL",
+                        id_cita=appointment_id)
+            return False
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
