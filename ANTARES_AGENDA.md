@@ -11,7 +11,7 @@
 | `pacientes` | Pacientes | `numeropaciente` PK int auto_increment, `tipoid` char(2), `idpaciente` char(20) = documento |
 | `pxcita` | Servicios por cita (cups) | `idcita` int, `cups` char(8) |
 | `codigossoat` | Catálogo CUPS | `codigocups`, `descripcioncups` |
-| `tblexepciondias` | Días exceptuados (no atiende) | `idtercero` (=idmedico), `fecha` |
+| `tblexepciondias` | Novedades por turno (NO son días libres) | `idtercero` (=idmedico), `fecha`, `jornadam/jornadat` (`-1`=trabaja, `0`=exceptuado), `idagenda` (solo `0`=consulta) |
 | `especialidades` | Catálogo de especialidades | `idespecialidad` int, `nombreespecialidad` varchar |
 | `tblagendas` | Agendas de procedimientos | `idtercero` (=idmedico), `nombreagenda` (ej. "Electrocardiogramas") |
 
@@ -76,3 +76,4 @@ disponibilidad = horario (citas_conf idagenda=0) − TODAS las citas con pacient
 3. **`idagenda=0` = consulta**; `≠0` = procedimientos (no mezclar para disponibilidad de consulta).
 4. **`citas` sin paciente no existen** (verificado: 0 en 39k filas). No filtrar por `estado=-1` + sin persona.
 5. `citas.fechacita` es `char(12)` `YYYYMMDDHHMM` local (sin zona); `target_date` es Colombia UTC-5.
+6. **`tblexepciondias` usa `-1`=trabaja / `0`=exceptuado por turno** (igual que `trabaja`). Solo `(jornadam=0 OR jornadat=0)` con `idagenda=0` es excepción real. Las filas `(-1,-1)` significan "trabaja normal" — jamás bloquear el día por ellas. Cumplido se marca con `cumplida=-1` + `horaatencion`, no con `estado=1`.

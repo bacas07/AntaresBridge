@@ -185,7 +185,7 @@ class AntaresDB:
     DOCTOR_NAMES = {
         "10409903": ("Dra. Coromoto Villalobos Danielline", "Gastroenterología Pediátrica"),
         "1118814810": ("Dra. Cindy Arregoces Álvarez", "Endocrinología Pediátrica"),
-        "1118839778": ("Dr. Pediatría (1118839778)", "Pediatría"),
+        "1118839778": ("Dra. Karen Dayana Suárez Maestre", "Neumología Pediátrica"),
         "111885355": ("Dra. María José Muñoz Zabaleta", "Neuropsicología"),
         "112447319": ("Dr. Pediatría (112447319)", "Pediatría"),
         "112761710": ("Dr. Carlos Tafur", "Neurología Pediátrica"),
@@ -198,7 +198,7 @@ class AntaresDB:
         "40940131": ("Dra. Mayolis Mengual Armenta", "Psicología"),
         "53815": ("Dr. Herman Belisario", "Neurología Pediátrica"),
         "56081106": ("Dra. Yael Avila San", "Dermatología Pediátrica"),
-        "6524194": ("Dr. Pediatría (6524194)", "Pediatría"),
+        "6524194": ("Dra. Maritza de Jesús Malave Sáez", "Gastroenterología Pediátrica"),
         "6748712": ("Dra. María Navarro", "Nefrología Pediátrica"),
         "755042": ("Dr. José Mora", "Ortopedia Pediátrica"),
         "7570754": ("Dr. Antonio Amaris Ariza", "Neuropsicología"),
@@ -209,6 +209,11 @@ class AntaresDB:
         "84089502": ("Dr. Dainer Freile", "Neumología Pediátrica"),
         "91430553": ("Dr. Psiquiatría (91430553)", "Psiquiatría"),
     }
+
+    # Doctores que NO atienden sábados aunque citas_conf traiga trabaja6=-1
+    # (verificado vs roster IPS mensual + 0 citas en sábado en 12 meses).
+    # Belisario (53815) y gastro (6524194) SÍ atienden sábados: no tocar.
+    SATURDAY_OFF_DOCTORS = {"17953649"}
 
     # idespecialidad de Antares (tabla especialidades) por especialidad.
     SPECIALTY_CODES = {
@@ -236,7 +241,10 @@ class AntaresDB:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT DISTINCT c.idmedico AS id
+                    SELECT DISTINCT c.idmedico AS id,
+                        (SELECT MAX(LEFT(c2.fechacita, 8))
+                           FROM citas c2
+                          WHERE c2.idmedico = c.idmedico) AS last_activity
                     FROM citas_conf c
                     WHERE c.activo = '-1'
                       AND c.idmedico IS NOT NULL
@@ -248,6 +256,13 @@ class AntaresDB:
             for r in rows:
                 doc_id = _str_val(r["id"])
                 name, specialty = self.DOCTOR_NAMES.get(doc_id, (f"Dr. {doc_id}", ""))
+                # Última cita en Antares (YYYYMMDD) o None si jamás atendió.
+                # La agenda lo usa como regla antifantasma (actividad ≤120 días).
+                last_activity = _str_val(r.get("last_activity", ""))
+                if len(last_activity) == 8 and last_activity.isdigit():
+                    last_activity = f"{last_activity[:4]}-{last_activity[4:6]}-{last_activity[6:]}"
+                else:
+                    last_activity = None
                 doctors.append({
                     "id": doc_id,
                     "name": name,
@@ -257,6 +272,7 @@ class AntaresDB:
                     "email": "",
                     "status": "ACTIVO",
                     "agenda_web": True,
+                    "last_appointment_at": last_activity,
                 })
 
             duration_ms = int((time.monotonic() - start) * 1000)
@@ -311,6 +327,9 @@ class AntaresDB:
                 for day_idx in range(7):
                     trabaja = _str_val(r.get(f"trabaja{day_idx}", "0"))
                     if trabaja != "-1":
+                        continue
+                    # Sábado desactivado por doctor (trabaja6 obsoleto en Antares).
+                    if day_idx == 6 and doctor_id in self.SATURDAY_OFF_DOCTORS:
                         continue
 
                     # Antares usa 0=domingo; el API/agenda usa 0=lunes.
@@ -511,17 +530,27 @@ class AntaresDB:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                # tblexepciondias: jornadam/jornadat usan la misma convención que
+                # trabaja (Antares): -1 = trabaja ese turno, 0 = exceptuado.
+                # Solo se sincroniza excepción REAL (al menos un turno en 0) de la
+                # agenda de consulta (idagenda=0). Las filas (-1,-1) significan
+                # "trabaja normal" y NO deben bloquear el día.
                 cursor.execute("""
-                    SELECT
+                    SELECT DISTINCT
                         e.idtercero AS doctor_id,
                         e.fecha AS start_date,
                         e.fecha AS end_date,
                         '' AS reason_code,
                         COALESCE(e.observaciones, 'Día exceptuado') AS reason_description,
-                        'EXCEPCION' AS source
+                        'EXCEPCION' AS source,
+                        e.jornadam AS jornada_manana,
+                        e.jornadat AS jornada_tarde,
+                        e.idagenda AS idagenda
                     FROM tblexepciondias e
                     INNER JOIN citas_conf c ON e.idtercero = c.idmedico
                     WHERE c.activo = '-1'
+                      AND e.idagenda = 0
+                      AND (e.jornadam = 0 OR e.jornadat = 0)
                     ORDER BY e.fecha DESC
                 """)
                 rows = _rows_to_dicts(cursor)
