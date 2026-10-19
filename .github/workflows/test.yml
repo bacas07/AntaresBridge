@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/ -q --tb=short
+
+  agenda:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_DB: agenda_system, POSTGRES_USER: agenda, POSTGRES_PASSWORD: test }
+        ports: ["5432:5432"]
+        options: --health-cmd="pg_isready -U agenda" --health-interval=5s
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install -r AgendaSystem/requirements.txt -r tests/requirements-test.txt
+      - run: pytest AgendaSystem/tests/ -q --tb=short
+        env:
+          DATABASE_URL: postgresql+asyncpg://agenda:test@localhost:5432/agenda_system
+          REDIS_URL: redis://localhost:6379/0
+          GROQ_API_KEY: dummy
+          KAPSO_API_KEY: dummy
